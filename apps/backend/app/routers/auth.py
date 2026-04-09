@@ -28,6 +28,11 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
     # 验证成年（仅比较出生年份，保守估计：当年未过生日也算）
     today = date.today()
     is_adult = (today.year - body.birth_year) >= 18
+    if not is_adult:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="本服务仅对成年用户开放",
+        )
 
     user = User(
         phone=body.phone,
@@ -53,6 +58,11 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="手机号或密码错误",
+        )
+    if not user.is_adult:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="本服务仅对成年用户开放",
         )
 
     token = create_access_token(user.id)

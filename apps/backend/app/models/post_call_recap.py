@@ -1,9 +1,8 @@
 """通话后小结"""
 import uuid
 from datetime import datetime
-from sqlalchemy import Text, ForeignKey
+from sqlalchemy import Text, ForeignKey, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 

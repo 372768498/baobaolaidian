@@ -12,6 +12,9 @@ export const WS_BASE_URL = __DEV__
   ? 'ws://192.168.2.6:8000'
   : 'wss://api.baobaolaidan.com';
 
+export const TTS_PLAYBACK_MODE =
+  process.env.EXPO_PUBLIC_TTS_PLAYBACK_MODE === 'tempfile' ? 'tempfile' : 'base64';
+
 // SecureStore keys
 export const STORAGE_KEYS = {
   ACCESS_TOKEN: 'baobao_access_token',

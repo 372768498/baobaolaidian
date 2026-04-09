@@ -13,7 +13,7 @@
  * UX: No back button — this is the natural end of the flow.
  * User can go home or view history from here.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -69,27 +69,56 @@ export default function RecapScreen() {
   const [memories, setMemories] = useState<MemoryItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [waitingForRecap, setWaitingForRecap] = useState(false);
+  const cancelledRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    loadRecap();
+    cancelledRef.current = false;
+    void loadRecap(0);
+    return () => {
+      cancelledRef.current = true;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, [sessionId]);
 
-  const loadRecap = async () => {
+  const loadRecap = async (attempt = 0) => {
+    let keepLoading = false;
     try {
       setLoading(true);
+      setError(null);
       // Fetch recap and recent memories in parallel
-      const [recapRes, sessionRes, memRes] = await Promise.all([
-        callApi.recap(sessionId),
+      const [sessionRes, memRes] = await Promise.all([
         callApi.session(sessionId),
         memoryApi.list(),
       ]);
-      setRecap(recapRes.data);
       setSession(sessionRes.data);
       setMemories(memRes.data);
+
+      try {
+        const recapRes = await callApi.recap(sessionId);
+        if (cancelledRef.current) return;
+        setRecap(recapRes.data);
+        setWaitingForRecap(false);
+        setRetryCount(attempt);
+      } catch (err: any) {
+        if (cancelledRef.current) return;
+        if (err.response?.status === 404 && attempt < 6) {
+          keepLoading = true;
+          setWaitingForRecap(true);
+          setRetryCount(attempt + 1);
+          retryTimerRef.current = setTimeout(() => {
+            void loadRecap(attempt + 1);
+          }, 2500);
+          return;
+        }
+        setError('无法加载通话小结，请稍后再试');
+      }
     } catch {
-      setError('无法加载通话小结，请稍后再试');
+      if (!cancelledRef.current) setError('无法加载通话小结，请稍后再试');
     } finally {
-      setLoading(false);
+      if (!cancelledRef.current && !keepLoading) setLoading(false);
     }
   };
 
@@ -98,7 +127,15 @@ export default function RecapScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>正在整理我们的对话...</Text>
+          <Text style={styles.loadingText}>
+            {waitingForRecap ? '正在生成通话小结...' : '正在整理我们的对话...'}
+          </Text>
+          {waitingForRecap ? (
+            <Text style={styles.waitingHint}>
+              AI 正在回顾这通电话，通常几秒内就会完成。
+              {retryCount > 0 ? ` 已尝试 ${retryCount} 次。` : ''}
+            </Text>
+          ) : null}
         </View>
       </SafeAreaView>
     );
@@ -131,6 +168,7 @@ export default function RecapScreen() {
           <Text style={styles.heroEmoji}>🌙</Text>
           <Text style={styles.heroTitle}>通话结束了</Text>
           <Text style={styles.heroSub}>谢谢你今晚愿意说说话</Text>
+          <Text style={styles.heroAiNote}>本次通话由 AI 陪伴完成</Text>
         </View>
 
         {/* Summary */}
@@ -227,6 +265,12 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: SPACING.sm,
   },
+  waitingHint: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   errorEmoji: { fontSize: 48 },
   errorText: {
     fontSize: FONT_SIZES.md,
@@ -249,6 +293,11 @@ const styles = StyleSheet.create({
   heroSub: {
     fontSize: FONT_SIZES.md,
     color: COLORS.textSecondary,
+  },
+  heroAiNote: {
+    marginTop: SPACING.xs,
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textLight,
   },
 
   card: {

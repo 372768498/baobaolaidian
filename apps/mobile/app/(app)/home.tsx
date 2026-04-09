@@ -7,7 +7,7 @@
  * - Shows upcoming scheduled call window so user feels anticipated
  * - Safety help link is always visible but unobtrusive
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -41,12 +41,18 @@ function timeEmoji(): string {
   return '🌙';
 }
 
+function formatCallWindow(start?: string | null, end?: string | null): string | null {
+  if (!start || !end) return null;
+  return `${start} - ${end}`;
+}
+
 export default function HomeScreen() {
   const { user, refreshUser } = useAuthStore();
   const [recentSessions, setRecentSessions] = useState<SessionOut[]>([]);
   const [loading, setLoading] = useState(false);
   const [calling, setCalling] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const navigatingToIncoming = useRef<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -65,6 +71,40 @@ export default function HomeScreen() {
     }, [])
   );
 
+  useEffect(() => {
+    if (!user?.onboarding_done) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await callApi.incoming();
+        const session = res.data;
+        if (
+          !cancelled &&
+          session &&
+          session.status === 'pending' &&
+          navigatingToIncoming.current !== session.id
+        ) {
+          navigatingToIncoming.current = session.id;
+          router.push({
+            pathname: '/call/incoming',
+            params: { sessionId: session.id, triggerType: session.trigger_type },
+          });
+        }
+      } catch {
+        // Polling failure is non-blocking.
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      navigatingToIncoming.current = null;
+    };
+  }, [user?.onboarding_done]);
+
   const handleEmergencyCall = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setCalling(true);
@@ -74,7 +114,7 @@ export default function HomeScreen() {
       // Navigate to the incoming call screen first for a natural "ringing" experience
       router.push({
         pathname: '/call/incoming',
-        params: { sessionId: session.id },
+        params: { sessionId: session.id, triggerType: session.trigger_type },
       });
     } catch (err: any) {
       const msg = err.response?.data?.detail ?? '无法发起通话，请稍后再试';
@@ -92,6 +132,7 @@ export default function HomeScreen() {
 
   const greeting = timeGreeting();
   const emoji = timeEmoji();
+  const callWindow = formatCallWindow(user?.call_time_start, user?.call_time_end);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -136,8 +177,11 @@ export default function HomeScreen() {
           <View style={styles.scheduledCard}>
             <Text style={styles.scheduledTitle}>🌙 睡前来电</Text>
             <Text style={styles.scheduledBody}>
-              今晚我会在你设定的时间段里主动打来，{'\n'}
+              {callWindow ? `今晚我会在 ${callWindow} 主动打来，\n` : '今晚我会在你设定的时间段里主动打来，\n'}
               不用等我，安心做你的事就好。
+            </Text>
+            <Text style={styles.scheduledHint}>
+              App 打开时会自动等这通来电。通话全程明确为 AI 互动。
             </Text>
           </View>
         )}
@@ -254,6 +298,11 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     color: COLORS.textSecondary,
     lineHeight: 20,
+  },
+  scheduledHint: {
+    marginTop: SPACING.sm,
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textLight,
   },
 
   section: { marginBottom: SPACING.lg },

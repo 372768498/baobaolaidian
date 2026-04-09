@@ -1,9 +1,8 @@
 """用户模型"""
 import uuid
 from datetime import date, datetime
-from sqlalchemy import String, Boolean, Date
+from sqlalchemy import String, Boolean, Date, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 

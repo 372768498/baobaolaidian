@@ -41,7 +41,6 @@ const PRESETS = [
   { label: '22:00 – 23:00', start: '22:00', end: '23:00' },
   { label: '23:00 – 00:00', start: '23:00', end: '00:00' },
   { label: '00:00 – 01:00', start: '00:00', end: '01:00' },
-  { label: '暂不设置',       start: '',      end: ''      },
 ];
 
 export default function Step4() {
@@ -52,12 +51,10 @@ export default function Step4() {
   const handleNext = async () => {
     setSaving(true);
     try {
-      if (selected.start) {
-        await userApi.updateOnboarding({
-          call_time_start: selected.start,
-          call_time_end: selected.end,
-        });
-      }
+      await userApi.updateOnboarding({
+        call_time_start: selected.start,
+        call_time_end: selected.end,
+      });
       await refreshUser();
       router.push('/(onboarding)/step5');
     } finally {

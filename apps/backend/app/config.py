@@ -31,16 +31,21 @@ class Settings(BaseSettings):
     llm_model: str = "claude-haiku-4-5-20251001"
     llm_base_url: str = ""                # 代理地址，留空则用 api.anthropic.com
 
-    # ── 语音 STT（阿里云）──────────────────────
-    aliyun_access_key_id: str = ""
-    aliyun_access_key_secret: str = ""
-    aliyun_stt_app_key: str = ""
-
-    # ── 语音 TTS（火山引擎）────────────────────
-    volcengine_access_key: str = ""
-    volcengine_secret_key: str = ""
-    volcengine_tts_app_id: str = ""
-    volcengine_tts_voice_type: str = "BV001_streaming"
+    # ── 语音（火山引擎）────────────────────────
+    volcengine_app_id: str = ""
+    volcengine_access_token: str = ""
+    volcengine_stt_address: str = "wss://openspeech.bytedance.com"
+    volcengine_stt_uri: str = "/api/v3/sauc/bigmodel"
+    volcengine_stt_cluster: str = ""
+    volcengine_stt_resource_id: str = "volc.bigasr.sauc.duration"
+    volcengine_stt_secret_key: str = ""
+    volcengine_tts_resource_id: str = "seed-tts-2.0"
+    volcengine_tts_model: str = "seed-tts-2.0-expressive"
+    volcengine_tts_cluster: str = "volcano_tts"
+    volcengine_tts_secret_key: str = ""
+    volcengine_tts_voice_type: str = "BV700_V2_streaming"
+    volcengine_tts_ws_url: str = "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
+    volcengine_tts_bidi_ws_url: str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
 
     # ── 推送通知（Firebase）────────────────────
     firebase_project_id: str = ""

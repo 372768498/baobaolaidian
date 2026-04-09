@@ -53,6 +53,8 @@ class UserOut(BaseModel):
     is_adult: bool
     onboarding_done: bool
     preferred_persona_id: str | None = None  # 来自 CallPreference，由路由层注入
+    call_time_start: str | None = None
+    call_time_end: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

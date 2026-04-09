@@ -47,6 +47,8 @@ export interface UserOut {
   birth_year: number | null;
   onboarding_done: boolean;
   preferred_persona_id: string | null;
+  call_time_start: string | null;
+  call_time_end: string | null;
   created_at: string;
 }
 
@@ -64,11 +66,13 @@ export interface SessionOut {
   user_id: string;
   persona_id: string;
   trigger_type: 'scheduled' | 'emergency' | 'manual';
-  status: 'pending' | 'active' | 'completed' | 'failed';
-  phase: string;
+  status: 'pending' | 'ringing' | 'answered' | 'completed' | 'missed' | 'risk_interrupted';
+  orchestration_phase: string | null;
+  risk_flagged: boolean;
   started_at: string | null;
   ended_at: string | null;
   duration_secs: number | null;
+  created_at: string;
 }
 
 export interface RecapOut {
@@ -129,6 +133,12 @@ export const userApi = {
 export const callApi = {
   triggerEmergency: () =>
     api.post<SessionOut>('/calls/emergency'),
+
+  incoming: () =>
+    api.get<SessionOut | null>('/calls/incoming'),
+
+  decline: (id: string) =>
+    api.post<SessionOut>(`/calls/sessions/${id}/decline`),
 
   sessions: (skip = 0, limit = 20) =>
     api.get<SessionOut[]>('/calls/sessions', { params: { skip, limit } }),

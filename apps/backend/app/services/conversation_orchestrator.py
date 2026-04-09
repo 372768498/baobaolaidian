@@ -38,6 +38,14 @@ from app.models.conversation_session import ConversationSession
 from app.models.conversation_message import ConversationMessage
 from app.models.risk_event import RiskEvent
 from app.models.user import User
+from app.speech import (
+    AudioInput,
+    DoubaoStreamingASRProvider,
+    DoubaoTTS2Provider,
+    SpeechMetrics,
+    STTProvider,
+    TTSProvider,
+)
 from app.services import risk_guard, persona_engine
 from app.services.risk_guard import RiskLevel
 
@@ -63,6 +71,15 @@ _SAFETY_SCRIPT = (
     "或者全国热线 400-161-9995。你不是一个人。"
 )
 
+_LOCAL_PHASE_RESPONSES = {
+    "OPENING": "我是 AI 陪伴助手，这通电话里我会一直在。今晚你现在最想先说哪一件事？",
+    "EMPATHY": "我在认真听。你不用急着整理得很完整，只要把此刻最难受的感觉说出来就好。",
+    "EXPRESSION": "如果把今天最压着你的那件事再说具体一点，我会更容易陪你一起把它放下来。",
+    "SUMMARY": "我先帮你收一下：今晚你其实已经撑了很久，也一直在努力不让自己垮下去。",
+    "MICRO_ACTION": "现在先只做一件很小的事吧，去喝几口温水，坐下来慢慢呼吸三次。",
+    "CLOSING": "谢谢你愿意接这通 AI 来电。今晚先到这里，我会记得你刚刚说过的话。晚一点也要对自己温柔一点。",
+}
+
 
 class CallOrchestrator:
     """
@@ -76,6 +93,8 @@ class CallOrchestrator:
         db: AsyncSession,
         session: ConversationSession,
         user: User,
+        stt_provider: STTProvider | None = None,
+        tts_provider: TTSProvider | None = None,
     ):
         self.ws = ws
         self.db = db
@@ -97,6 +116,9 @@ class CallOrchestrator:
         self.phase_turn_count = 0          # 当前阶段已完成轮数
         self.total_turns = 0               # 全局轮数
         self.history: list[dict] = []      # LLM messages list
+        self.stt_provider = stt_provider or DoubaoStreamingASRProvider()
+        self.tts_provider = tts_provider or DoubaoTTS2Provider()
+        self.voice_metrics = SpeechMetrics()
 
     async def run(self) -> None:
         """主循环：持续接收音频帧，处理每轮对话"""
@@ -146,6 +168,13 @@ class CallOrchestrator:
         此处为简化版：客户端直接发送文字（实际项目中接 STT 服务）。
         """
         audio_chunks: list[bytes] = []
+        audio_meta = {
+            "audio_format": "wav",
+            "sample_rate": 16000,
+            "bits_per_sample": 16,
+            "channels": 1,
+            "language": "zh-CN",
+        }
 
         while True:
             try:
@@ -162,12 +191,15 @@ class CallOrchestrator:
             if msg_type == "audio_chunk":
                 chunk = base64.b64decode(msg["data"])
                 audio_chunks.append(chunk)
+                audio_meta["audio_format"] = msg.get("audio_format", audio_meta["audio_format"])
+                audio_meta["sample_rate"] = int(msg.get("sample_rate", audio_meta["sample_rate"]))
+                audio_meta["bits_per_sample"] = int(msg.get("bits_per_sample", audio_meta["bits_per_sample"]))
+                audio_meta["channels"] = int(msg.get("channels", audio_meta["channels"]))
+                audio_meta["language"] = msg.get("language", audio_meta["language"])
 
             elif msg_type == "end_of_speech":
-                # TODO: 将 audio_chunks 发给 STT 服务，此处返回占位文字
                 if audio_chunks:
-                    # 实际项目中调用 stt_service.transcribe(b"".join(audio_chunks))
-                    return "[STT_PLACEHOLDER]"
+                    return await self._transcribe_audio_chunks(audio_chunks, audio_meta)
 
             elif msg_type == "stt_result":
                 # 前端文字模式（MVP）：直接返回文字，跳过 STT
@@ -198,20 +230,31 @@ class CallOrchestrator:
         phase_hint = self._phase_hint()
         full_system = f"{system}\n\n【当前阶段】{self.current_phase}：{phase_hint}"
 
-        # 流式调用 LLM
         assistant_text = ""
-        async with self.client.messages.stream(
-            model=settings.llm_model,
-            max_tokens=200,
-            system=full_system,
-            messages=self.history,
-        ) as stream:
-            async for text_delta in stream.text_stream:
-                assistant_text += text_delta
-                # TODO: 将 text_delta 送入 TTS 流式合成，此处直接发文字帧
+        if not (settings.anthropic_api_key or settings.anthropic_auth_token):
+            assistant_text = self._fallback_response(user_text)
+        else:
+            async with self.client.messages.stream(
+                model=settings.llm_model,
+                max_tokens=200,
+                system=full_system,
+                messages=self.history,
+                ) as stream:
+                    async for text_delta in stream.text_stream:
+                        assistant_text += text_delta
+
+        async for chunk in self.tts_provider.synthesize_stream(assistant_text):
+            if chunk.metrics:
+                self._merge_voice_metrics(chunk.metrics)
+            if chunk.text_delta:
                 await self.ws.send_text(json.dumps({
                     "type": "text_delta",
-                    "delta": text_delta,          # 字段名与前端 useWebSocket 对齐
+                    "delta": chunk.text_delta,
+                }))
+            if chunk.audio_base64:
+                await self.ws.send_text(json.dumps({
+                    "type": "tts_chunk",
+                    "data": chunk.audio_base64,
                 }))
 
         # 完整轮次结束帧（前端用 full_text 更新消息列表）
@@ -253,6 +296,8 @@ class CallOrchestrator:
         )
         self.db.add(event)
         await self.db.commit()
+        await self.tts_provider.interrupt()
+        self.voice_metrics.interrupt_count += 1
 
         # 发送安全话术（不走 LLM）
         await self.ws.send_text(json.dumps({
@@ -275,6 +320,18 @@ class CallOrchestrator:
         if self.session.status not in ("risk_interrupted",):
             self.session.status = "completed"
         await self.db.commit()
+        logger.info(
+            "orchestrator: session=%s metrics=%s",
+            self.session.id,
+            {
+                "first_byte_latency_ms": self.voice_metrics.first_byte_latency_ms,
+                "final_transcript_latency_ms": self.voice_metrics.final_transcript_latency_ms,
+                "tts_start_latency_ms": self.voice_metrics.tts_start_latency_ms,
+                "tts_total_duration_ms": self.voice_metrics.tts_total_duration_ms,
+                "interrupt_count": self.voice_metrics.interrupt_count,
+                "error_code": self.voice_metrics.error_code,
+            },
+        )
 
         await self.ws.send_text(json.dumps({"type": "call_ended"}))
 
@@ -314,3 +371,54 @@ class CallOrchestrator:
     def _max_turns(self) -> int:
         """根据最大通话时长估算最多轮数（假设每轮约 60s）"""
         return settings.max_call_duration_secs // 60
+
+    def _fallback_response(self, user_text: str | None) -> str:
+        """无 LLM 配置时的本地回复，保证联调和测试可以闭环。"""
+        base = _LOCAL_PHASE_RESPONSES.get(self.current_phase, _LOCAL_PHASE_RESPONSES["EMPATHY"])
+        if not user_text:
+            return base
+
+        user_text = user_text.strip()
+        if self.current_phase == "EMPATHY":
+            if user_text.startswith("[VOICE_MESSAGE"):
+                return "我收到你刚刚发来的语音了。虽然这版还不能逐字转成文字，但我已经接住这次表达。你愿意再继续说一点，或者用文字补一句最难受的点吗？"
+            return f"我听见你刚刚提到“{user_text[:24]}”。这件事落在你身上，难受是很自然的。你可以继续慢慢说。"
+        if self.current_phase == "EXPRESSION":
+            if user_text.startswith("[VOICE_MESSAGE"):
+                return "这段语音我已经收到。你可以继续发下一段，或者用一句话告诉我，这件事最压你的地方是什么。"
+            return f"你已经说得很勇敢了。关于“{user_text[:24]}”，最刺痛你的那一刻是什么？"
+        if self.current_phase == "SUMMARY":
+            return f"我理解到的是：你最近一直被“{user_text[:24]}”牵着情绪走，也很想先稳住自己。"
+        if self.current_phase == "MICRO_ACTION":
+            return "我们先不解决全部问题。现在只做一件最小的事：放下手机前，喝水、洗把脸，或者把窗户打开半分钟。"
+        if self.current_phase == "CLOSING":
+            return "今晚先说到这里。你已经比刚接通时更稳一点了，剩下的事明天再处理也来得及。"
+        return base
+
+    async def _transcribe_audio_chunks(self, audio_chunks: list[bytes], audio_meta: dict[str, str | int]) -> str:
+        result = await self.stt_provider.transcribe(
+            AudioInput(
+                audio_bytes=b"".join(audio_chunks),
+                audio_format=str(audio_meta["audio_format"]),
+                sample_rate=int(audio_meta["sample_rate"]),
+                bits_per_sample=int(audio_meta["bits_per_sample"]),
+                channels=int(audio_meta["channels"]),
+                language=str(audio_meta["language"]),
+            )
+        )
+        self._merge_voice_metrics(result.metrics)
+        return result.transcript
+
+    def _merge_voice_metrics(self, incoming: SpeechMetrics) -> None:
+        if incoming.first_byte_latency_ms is not None:
+            self.voice_metrics.first_byte_latency_ms = incoming.first_byte_latency_ms
+        if incoming.final_transcript_latency_ms is not None:
+            self.voice_metrics.final_transcript_latency_ms = incoming.final_transcript_latency_ms
+        if incoming.tts_start_latency_ms is not None:
+            self.voice_metrics.tts_start_latency_ms = incoming.tts_start_latency_ms
+        if incoming.tts_total_duration_ms is not None:
+            self.voice_metrics.tts_total_duration_ms = incoming.tts_total_duration_ms
+        if incoming.error_code:
+            self.voice_metrics.error_code = incoming.error_code
+        self.voice_metrics.interrupt_count += incoming.interrupt_count
+        self.voice_metrics.extras.update(incoming.extras)

@@ -17,16 +17,20 @@ import { COLORS, FONT_SIZES, RADIUS, SPACING } from '@/lib/constants';
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '待接通',
-  active: '通话中',
+  ringing: '待接通',
+  answered: '通话中',
   completed: '已完成',
-  failed: '未接通',
+  missed: '未接通',
+  risk_interrupted: '安全中断',
 };
 
 const STATUS_COLOR: Record<string, string> = {
   pending: COLORS.warning,
-  active: COLORS.success,
+  ringing: COLORS.warning,
+  answered: COLORS.success,
   completed: COLORS.textSecondary,
-  failed: COLORS.danger,
+  missed: COLORS.danger,
+  risk_interrupted: COLORS.warning,
 };
 
 function SessionItem({ session }: { session: SessionOut }) {

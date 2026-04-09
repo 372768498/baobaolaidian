@@ -15,7 +15,8 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.baobaolaidan.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "通话功能需要使用麦克风"
+        "NSMicrophoneUsageDescription": "通话功能需要使用麦克风",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -32,6 +33,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
       "expo-secure-store",
       [
         "expo-av",
@@ -51,7 +53,12 @@
       },
       "eas": {
         "projectId": "e2d658c7-1e7d-466b-94e2-b80cd55f0f47"
-      }
+      },
+      "ttsPlaybackMode": "base64",
+      "ttsPlaybackModeOptions": [
+        "base64",
+        "tempfile"
+      ]
     },
     "owner": "bb372768498s-organization"
   }

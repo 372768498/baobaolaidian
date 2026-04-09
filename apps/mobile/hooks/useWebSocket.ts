@@ -7,7 +7,7 @@
  *     { type: "text_delta",  delta: string }         — streaming LLM text
  *     { type: "text_done",   full_text: string }     — complete utterance
  *     { type: "phase_change", phase: string }        — conversation phase update
- *     { type: "risk_alert",  action: string }        — safety escalation
+ *     { type: "risk_alert",  script: string }        — safety escalation
  *     { type: "call_ended"  }                        — server hung up
  *     { type: "error",       message: string }
  *
@@ -34,17 +34,33 @@ interface UseWebSocketResult {
   messages: CallMessage[];
   currentAiText: string;       // streaming text, resets when text_done arrives
   riskAlert: string | null;
+  ttsChunkCount: number;
   sendSttResult: (text: string) => void;
+  sendAudioMessage: (payload: {
+    base64Audio: string;
+    audioFormat: string;
+    sampleRate: number;
+    bitsPerSample: number;
+    channels: number;
+    language?: string;
+  }) => void;
   hangUp: () => void;
 }
 
-export function useWebSocket(sessionId: string): UseWebSocketResult {
+interface UseWebSocketOptions {
+  onTtsChunk?: (base64Audio: string) => void;
+  onTtsTurnDone?: () => void;
+  onPlaybackStop?: (reason?: string) => void;
+}
+
+export function useWebSocket(sessionId: string, options?: UseWebSocketOptions): UseWebSocketResult {
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<WsStatus>('connecting');
   const [phase, setPhase] = useState('OPENING');
   const [messages, setMessages] = useState<CallMessage[]>([]);
   const [currentAiText, setCurrentAiText] = useState('');
   const [riskAlert, setRiskAlert] = useState<string | null>(null);
+  const [ttsChunkCount, setTtsChunkCount] = useState(0);
 
   const phaseLabel = CALL_PHASE_LABELS[phase] ?? phase;
 
@@ -99,6 +115,7 @@ export function useWebSocket(sessionId: string): UseWebSocketResult {
         // Finalize AI utterance — add to message history
         const text = frame.full_text as string;
         setCurrentAiText('');
+        options?.onTtsTurnDone?.();
         setMessages((prev) => [
           ...prev,
           { role: 'ai', text, timestamp: Date.now() },
@@ -111,11 +128,20 @@ export function useWebSocket(sessionId: string): UseWebSocketResult {
         break;
 
       case 'risk_alert':
-        setRiskAlert(frame.action as string);
+        setRiskAlert((frame.script as string) ?? '我需要先停下来，请联系专业支持。');
+        options?.onPlaybackStop?.('risk_interrupt');
         break;
 
       case 'call_ended':
+        options?.onPlaybackStop?.('call_ended');
         setStatus('disconnected');
+        break;
+
+      case 'tts_chunk':
+        if (typeof frame.data === 'string') {
+          setTtsChunkCount((prev) => prev + 1);
+          options?.onTtsChunk?.(frame.data);
+        }
         break;
 
       case 'error':
@@ -125,7 +151,7 @@ export function useWebSocket(sessionId: string): UseWebSocketResult {
       default:
         break;
     }
-  }, []);
+  }, [options]);
 
   const sendSttResult = useCallback((text: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -134,6 +160,32 @@ export function useWebSocket(sessionId: string): UseWebSocketResult {
       setMessages((prev) => [
         ...prev,
         { role: 'user', text, timestamp: Date.now() },
+      ]);
+    }
+  }, []);
+
+  const sendAudioMessage = useCallback((payload: {
+    base64Audio: string;
+    audioFormat: string;
+    sampleRate: number;
+    bitsPerSample: number;
+    channels: number;
+    language?: string;
+  }) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'audio_chunk',
+        data: payload.base64Audio,
+        audio_format: payload.audioFormat,
+        sample_rate: payload.sampleRate,
+        bits_per_sample: payload.bitsPerSample,
+        channels: payload.channels,
+        language: payload.language ?? 'zh-CN',
+      }));
+      wsRef.current.send(JSON.stringify({ type: 'end_of_speech' }));
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', text: '🎤 发来了一段语音', timestamp: Date.now() },
       ]);
     }
   }, []);
@@ -153,7 +205,9 @@ export function useWebSocket(sessionId: string): UseWebSocketResult {
     messages,
     currentAiText,
     riskAlert,
+    ttsChunkCount,
     sendSttResult,
+    sendAudioMessage,
     hangUp,
   };
 }

@@ -1,11 +1,14 @@
 """
 来电路由
 
-POST /api/v1/calls/emergency    — 用户主动触发紧急来电
-GET  /api/v1/calls/sessions     — 历史通话列表
-GET  /api/v1/calls/sessions/{id} — 单次通话详情
+POST /api/v1/calls/emergency         — 用户主动触发紧急来电
+GET  /api/v1/calls/incoming         — 轮询当前待接来电（用于 App 内定时来电）
+POST /api/v1/calls/sessions/{id}/decline — 用户拒接来电
+GET  /api/v1/calls/sessions         — 历史通话列表
+GET  /api/v1/calls/sessions/{id}    — 单次通话详情
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +23,8 @@ from app.schemas.call import SessionOut
 from app.services.call_scheduler import trigger_emergency_call
 
 router = APIRouter(prefix="/calls", tags=["calls"])
+
+_INCOMING_LOOKBACK_MINUTES = 90
 
 
 @router.post("/emergency", response_model=SessionOut, status_code=201)
@@ -44,6 +49,59 @@ async def emergency_call(
         raise HTTPException(status_code=403, detail="本服务仅对成年用户开放")
 
     session = await trigger_emergency_call(db, current_user.id, pref.persona_id)
+    return session
+
+
+@router.get("/incoming", response_model=SessionOut | None)
+async def get_incoming_call(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    轮询用户当前待接来电。
+    移动端首页可每隔数秒调用一次，以在没有系统推送时实现 App 内“定时来电”。
+    """
+    now = datetime.now(timezone.utc)
+    lookback = now - timedelta(minutes=_INCOMING_LOOKBACK_MINUTES)
+    result = await db.execute(
+        select(ConversationSession)
+        .where(
+            ConversationSession.user_id == current_user.id,
+            ConversationSession.status.in_(["pending", "ringing"]),
+            ConversationSession.created_at >= lookback,
+        )
+        .order_by(
+            ConversationSession.trigger_type.desc(),
+            ConversationSession.created_at.desc(),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+@router.post("/sessions/{session_id}/decline", response_model=SessionOut)
+async def decline_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(ConversationSession).where(
+            ConversationSession.id == session_id,
+            ConversationSession.user_id == current_user.id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="通话记录不存在")
+    if session.status not in ("pending", "ringing"):
+        return session
+
+    session.status = "missed"
+    session.ended_at = datetime.now(timezone.utc)
+    session.duration_secs = 0
+    await db.commit()
+    await db.refresh(session)
     return session
 
 

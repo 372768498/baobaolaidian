@@ -19,10 +19,11 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '@/store/authStore';
+import { callApi } from '@/lib/api';
 import { COLORS, FONT_SIZES, RADIUS, SPACING } from '@/lib/constants';
 
 export default function IncomingCallScreen() {
-  const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
+  const { sessionId, triggerType } = useLocalSearchParams<{ sessionId: string; triggerType?: string }>();
   const { personas, user, loadPersonas } = useAuthStore();
 
   // Pulsing ring animation
@@ -81,6 +82,9 @@ export default function IncomingCallScreen() {
   };
 
   const handleDecline = () => {
+    if (sessionId) {
+      callApi.decline(sessionId).catch(() => {});
+    }
     router.back();
   };
 
@@ -90,7 +94,9 @@ export default function IncomingCallScreen() {
         {/* Caller info */}
         <View style={styles.callerSection}>
           <Text style={styles.callerLabel}>宝宝来电</Text>
-          <Text style={styles.triggerLabel}>情绪急救 · 来了</Text>
+          <Text style={styles.triggerLabel}>
+            {triggerType === 'scheduled' ? '睡前陪伴 · 来了' : '情绪急救 · 来了'}
+          </Text>
 
           {/* Animated rings */}
           <View style={styles.avatarWrapper}>
@@ -109,6 +115,7 @@ export default function IncomingCallScreen() {
 
           <Text style={styles.personaName}>{persona?.name ?? 'AI 朋友'}</Text>
           <Text style={styles.personaBio}>{persona?.short_bio ?? '在线等你接听'}</Text>
+          <Text style={styles.aiDisclosure}>你即将接听一通 AI 陪伴来电</Text>
         </View>
 
         {/* Call controls */}
@@ -198,6 +205,11 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.xs,
   },
   personaBio: { fontSize: FONT_SIZES.sm, color: 'rgba(255,255,255,0.6)' },
+  aiDisclosure: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.xs,
+    color: 'rgba(255,255,255,0.55)',
+  },
 
   controls: {
     flexDirection: 'row',

@@ -16,6 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/store/authStore';
 import { COLORS, FONT_SIZES, RADIUS, SPACING } from '@/lib/constants';
 
+function formatCallWindow(start?: string | null, end?: string | null): string {
+  if (!start || !end) return '点击修改';
+  return `${start} - ${end}`;
+}
+
 function SettingRow({
   label,
   value,
@@ -47,6 +52,7 @@ function SettingRow({
 
 export default function SettingsScreen() {
   const { user, logout } = useAuthStore();
+  const callWindow = formatCallWindow(user?.call_time_start, user?.call_time_end);
 
   const handleLogout = () => {
     Alert.alert('退出登录', '确定要退出吗？', [
@@ -83,7 +89,7 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <SettingRow
             label="来电时间窗口"
-            value="点击修改"
+            value={callWindow}
             onPress={() => router.push('/(onboarding)/step4')}
           />
         </View>

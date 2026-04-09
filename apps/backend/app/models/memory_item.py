@@ -1,9 +1,8 @@
 """记忆条目 — AI 只记录 4 类结构化记忆"""
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, Float, Boolean, ForeignKey
+from sqlalchemy import String, Text, Float, Boolean, ForeignKey, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 

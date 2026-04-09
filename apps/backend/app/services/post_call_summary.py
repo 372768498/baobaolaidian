@@ -73,21 +73,32 @@ async def generate_recap(
     )
 
     # ── 2. 调用 LLM 生成小结 ───────────────────────────────────────────────────
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     try:
-        response = await client.messages.create(
-            model=settings.llm_model,
-            max_tokens=512,
-            messages=[{
-                "role": "user",
-                "content": _SUMMARY_PROMPT.format(conversation=conversation),
-            }],
-        )
-        raw = response.content[0].text.strip()
-        data = json.loads(raw)
+        if settings.anthropic_api_key or settings.anthropic_auth_token:
+            client_kwargs: dict = {}
+            if settings.llm_base_url:
+                client_kwargs["base_url"] = settings.llm_base_url
+            if settings.anthropic_auth_token:
+                client_kwargs["auth_token"] = settings.anthropic_auth_token
+            else:
+                client_kwargs["api_key"] = settings.anthropic_api_key
+
+            client = AsyncAnthropic(**client_kwargs)
+            response = await client.messages.create(
+                model=settings.llm_model,
+                max_tokens=512,
+                messages=[{
+                    "role": "user",
+                    "content": _SUMMARY_PROMPT.format(conversation=conversation),
+                }],
+            )
+            raw = response.content[0].text.strip()
+            data = json.loads(raw)
+        else:
+            data = _fallback_recap(messages)
     except Exception as e:
         logger.error("post_call_summary: LLM call failed: %s", e)
-        return None
+        data = _fallback_recap(messages)
 
     # ── 3. 写入通话后小结 ──────────────────────────────────────────────────────
     recap = PostCallRecap(
@@ -114,3 +125,22 @@ async def generate_recap(
     await db.commit()
     logger.info("post_call_summary: recap created for session %s", session_id)
     return recap
+
+
+def _fallback_recap(messages: list[ConversationMessage]) -> dict:
+    """本地兜底摘要，保证没有模型 key 时也能形成闭环。"""
+    user_messages = [m.content.strip() for m in messages if m.role == "user" and m.content.strip()]
+    latest = user_messages[-1] if user_messages else "今天有些累"
+
+    memories = []
+    if len(user_messages) >= 1:
+        memories.append({"category": "recent_concern", "content": latest[:40]})
+    if len(user_messages) >= 2:
+        memories.append({"category": "emotion_trigger", "content": user_messages[0][:40]})
+
+    return {
+        "summary_text": f"今晚你提到了“{latest[:24]}”，也在努力让自己慢慢稳下来。",
+        "micro_action": "喝几口温水，慢慢呼吸。",
+        "followup_point": "下次可以继续聊聊这件事最难的地方。",
+        "memories": memories,
+    }

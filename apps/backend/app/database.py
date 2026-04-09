@@ -8,13 +8,24 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 
+def _build_async_engine():
+    """为生产和测试环境创建兼容的异步引擎。"""
+    engine_kwargs = {
+        "echo": (settings.app_env == "development"),
+    }
+
+    if settings.database_url.startswith("sqlite"):
+        # SQLite 不支持 pool_size / max_overflow，测试环境通常走这里。
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        engine_kwargs["pool_size"] = 10
+        engine_kwargs["max_overflow"] = 20
+
+    return create_async_engine(settings.database_url, **engine_kwargs)
+
+
 # ── 异步引擎（FastAPI 使用）────────────────────
-async_engine = create_async_engine(
-    settings.database_url,
-    echo=(settings.app_env == "development"),
-    pool_size=10,
-    max_overflow=20,
-)
+async_engine = _build_async_engine()
 
 AsyncSessionLocal = async_sessionmaker(
     async_engine,

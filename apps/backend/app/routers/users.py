@@ -45,6 +45,8 @@ async def get_me(
         "is_adult": current_user.is_adult,
         "onboarding_done": current_user.onboarding_done,
         "preferred_persona_id": str(pref.persona_id) if pref and pref.persona_id else None,
+        "call_time_start": pref.window_start.strftime("%H:%M") if pref and pref.window_start else None,
+        "call_time_end": pref.window_end.strftime("%H:%M") if pref and pref.window_end else None,
         "created_at": current_user.created_at,
     }
 
@@ -103,6 +105,26 @@ async def complete_onboarding(
             pref.window_end = time(h, m)
 
         pref.is_active = True
+
+    if body.onboarding_done:
+        pref_result = await db.execute(
+            select(CallPreference).where(CallPreference.user_id == current_user.id)
+        )
+        pref = pref_result.scalar_one_or_none()
+        missing_fields: list[str] = []
+        if not current_user.nickname:
+            missing_fields.append("nickname")
+        if not current_user.avatar_emoji:
+            missing_fields.append("avatar_emoji")
+        if not pref or not pref.persona_id:
+            missing_fields.append("preferred_persona_id")
+        if not pref or not pref.window_start or not pref.window_end:
+            missing_fields.append("call_time_window")
+        if missing_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Onboarding 信息不完整: {', '.join(missing_fields)}",
+            )
 
     await db.commit()
     return {"message": "ok"}

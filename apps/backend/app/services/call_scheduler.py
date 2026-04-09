@@ -91,6 +91,18 @@ async def _maybe_schedule(
     if today_count >= settings.max_calls_per_day:
         return
 
+    # 避免在同一窗口内重复创建未处理来电。
+    active_result = await db.execute(
+        select(ConversationSession).where(
+            ConversationSession.user_id == pref.user_id,
+            ConversationSession.trigger_type == "scheduled",
+            ConversationSession.status.in_(["pending", "ringing", "answered"]),
+            ConversationSession.created_at >= today_start_utc,
+        )
+    )
+    if active_result.scalar_one_or_none():
+        return
+
     # 创建 pending session
     session = ConversationSession(
         user_id=pref.user_id,
